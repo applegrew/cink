@@ -1,0 +1,1493 @@
+[*
+/**
+* @preserve
+* CInk
+* Version: 2.0
+* GPL v3 License
+* Author: AppleGrew
+* Website: http://cink.applegrew.com
+* License Details:-
+*   CInk - Pure Javascript CFDG compiler.
+*   Copyright (C) 2011 Nirupam Biswas
+*
+*   This program is free software: you can redistribute it and/or modify
+*   it under the terms of the GNU General Public License as published by
+*   the Free Software Foundation, either version 3 of the License, or
+*   (at your option) any later version.
+*
+*   This program is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License
+*   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+(function () {
+var CInk = window.CInk, args, UNICODE_PATTERN, predefinedFuncs, geoTrans, txtTrans, pathTrans, shadowTrans;
+//==============
+//Util Functions
+//==============
+function isNotDefined(v) {
+    return v === null || typeof v === 'undefined';
+}
+function d2r(d) { return d * (Math.PI / 180); }
+function r2d(r) { return r * (180 / Math.PI); }
+function sortedAscPush(arr, o, key) {//We could have used sort() after push() but that would be at best O(N lnN). This is O(N).
+    if (arr.length === 0) {
+        arr.push(o);
+        return;
+    }
+    var i, j;
+    for (i = 0; i < arr.length; i += 1) {
+        if (arr[i][key] >= o[key]) {
+            break;
+        }
+    }
+    for (j = arr.length; j > i; j -= 1) {
+        arr[j] = arr[j - 1];
+    }
+    arr[i] = o;
+}
+function indexOf(arr, v) {
+    var i;
+    for (i = 0; i < arr.length; i += 1) {
+        if (arr[i] === v) {
+            return i;
+        }
+    }
+    return -1;
+}
+/*function isChildrenValid(children, required, optional, minArgs) {
+    var i, k, argC, key;
+    for (i = 0; i < required.length; i += 1) {
+        if(isNotDefined(children[required[i]])) {
+            CInk.err(required[i] + " is not found in " + children);
+            return false;
+        }
+    }
+    k = [];
+    argC = 0;
+    for (key in children) {
+        if (children.hasOwnProperty(key)) {
+            if (indexOf(required, key) === -1 && indexOf(optional, key) === -1) {
+                CInk.err(key + " is not allowed here.");
+                return false;
+            }
+            argC += 1;
+        }
+    }
+    if (argC < minArgs) {
+        CInk.err(argC + " no. of arguments supplied. Need minimum of " + minArgs + " arguments.");
+        return false;
+    }
+    return true;
+}*/
+UNICODE_PATTERN = /\{u([0-9]+)\}/gi;
+function evaluteTxtAdjustments(transArr) {
+    var outTrans = {}, lastTxt = '', i, type, t, ft, cc, c;
+    
+    function getSafeTxt() {
+        return isNotDefined(outTrans.t) ? '' : outTrans.t;
+    }
+    for (i = 0; i < transArr.length; i += 1) {
+        type = transArr[i].type;
+        switch (type) {
+        case 'fn':
+        case 'fu':
+        case 'base':
+        case 'align':
+        case 'st':
+        case 'fstyle':
+            if (isNotDefined(outTrans[type])) {
+                outTrans[type] = transArr[i].val; //If type is e then Renderer should empty previous text.
+            }
+            break;
+        case 'e':
+            t = getSafeTxt();
+            if (t.length !== 0) {
+                lastTxt = t;
+                outTrans.t = null;
+            } else {
+                outTrans.e = true;
+            }
+            break;
+        case 'fs':
+        case 'sw':
+            if (isNotDefined(outTrans[type])) {
+                outTrans[type] = 0;
+            }
+            outTrans[type] += transArr[i].val;
+            break;
+        case 't':
+            if (isNotDefined(outTrans[type])) {
+                outTrans[type] = '';
+            }
+            t = transArr[i].val;
+            UNICODE_PATTERN.lastIndex = 0;
+            while ((c = UNICODE_PATTERN.exec(t)) !== null) {
+                t = t.replace(c[0], String.fromCharCode(c[1]));
+                UNICODE_PATTERN.lastIndex = UNICODE_PATTERN.lastIndex - c[0].length + 1;
+            }
+            if (t.length !== 0) {
+                lastTxt = '';
+            }
+            outTrans[type] = outTrans[type].concat(t);
+            break;
+        case 'bkspc':
+            t = getSafeTxt();
+            if (t.length !== 0) {
+                lastTxt = t;
+                outTrans.t = t.substr(0, t.length - 1);
+            } else {
+                outTrans.bkspc = true; //Value not really needed, but given to comply with general assumptions.
+            }
+            break;
+        case '_t':
+            t = lastTxt;
+            if (t.length === 0) {
+                t = getSafeTxt();
+            }
+            if (t.length !== 0) {
+                outTrans.t = getSafeTxt().concat(String.fromCharCode(t.charCodeAt(t.length - 1) + transArr[i].val));
+            } else {
+                outTrans._t = true;
+            }
+            break;
+        }
+    }
+    if (!isNotDefined(outTrans.t)) {
+        //Convert unicode chars back to notation form, i.e. {uxxx} form. xxx is the decimal value of the char.
+        t = outTrans.t;
+        ft = '';
+        for (i = 0; i < t.length; i += 1) {
+            cc = t.charCodeAt(i);
+            if (cc >= 32 && cc <= 126) {
+                ft += t.charAt(i);
+            } else {
+                ft += '{u' + cc + '}';
+            }
+        }
+        outTrans.t = ft;
+    }
+    return outTrans;
+}
+
+//================
+//Global Functions
+//================
+if (!CInk) {
+    CInk = window.CInk = {};
+    CInk.log = function log() {
+        if (console && console.log) {
+            args = Array.prototype.slice.call(arguments);
+            console.log.apply(console, args);
+        }
+    };
+    CInk.warn = function warn() {
+        if (console && console.warn) {
+            args = Array.prototype.slice.call(arguments);
+            console.warn.apply(console, args);
+            console.trace();
+        }
+    };
+    CInk.err = function err() {
+        if (console && console.error) {
+            args = Array.prototype.slice.call(arguments);
+            console.error.apply(console, args);
+            console.trace();
+        }
+    };
+}
+predefinedFuncs = {
+    sin: {agc: 1, f: function sin(x){ return Math.sin(d2r(x)); }},
+    cos: {agc: 1, f: function cos(x){ return Math.cos(d2r(x)); }},
+    tan: {agc: 1, f: function tan(x){ return Math.tan(d2r(x)); }},
+    cot: {agc: 1, f: function cot(x){ return 1 / Math.tan(d2r(x)); }},
+    asin: {agc: 1, f: function asin(x){ return r2d(Math.asin(x)); }},
+    acos: {agc: 1, f: function acos(x){ return r2d(Math.acos(x)); }},
+    atan: {agc: 1, f: function atan(x){ return r2d(Math.atan(x)); }},
+    acot: {agc: 1, f: function acot(x){ return 90 - predefinedFuncs.atan(x); }},
+    sinh: {agc: 1, f: function sinh(x) { x = d2r(x); return (Math.exp(x) - Math.exp(-x)) / 2; }},
+    cosh: {agc: 1, f: function cosh(x) { x = d2r(x); return (Math.exp(x) + Math.exp(-x)) / 2; }},
+    tanh: {agc: 1, f: function tanh(x) { x = d2r(x); return (Math.exp(x) - Math.exp(-x)) / (Math.exp(x) + Math.exp(-x)); }},
+    asinh: {agc: 1, f: function asinh(x) { return r2d(Math.log(x + Math.sqrt(x * x + 1))); }},
+    acosh: {agc: 1, f: function acosh(x) { return r2d(Math.log(x + Math.sqrt(x * x - 1))); }},
+    atanh: {agc: 1, f: function atanh(x) { return r2d(0.5 * Math.log((1 + x) / (1 - x))); }},
+    log: {agc: 1, f: Math.log},
+    log10: {agc: 1, f: function log10(x){return Math.log(x) / Math.LN10;}},
+    sqrt: {agc: 1, f: Math.sqrt},
+    exp: {agc: 1, f: function exp(x){return Math.pow(Math.E, x);}},
+    abs: {agc: 1, f: Math.abs},
+    atan2: {agc: 2, f: Math.atan2},
+    mod: {agc: 2, f: function mod(x, y){return x % y;}}
+};
+geoTrans = ['gx', 'gy', 'x', 'y', 'r', 's', 'skew', 'f', 'z'];
+txtTrans = ['t', 'e', '_t', 'bkspc', 'fn', 'fs', 'fu', 'st', 'base', 'align', 'sw', 'fstyle'];
+shadowTrans = ['shx', 'shy', 'shblur', 'shh', 'shsat', 'shb', 'sha'];
+pathTrans = ['x0', 'x1', 'x2', 'y0', 'y1', 'y2', 'rad', 'rx', 'ry', 'stw', 'p', 'p1'];
+CInk.Compile = function Compile(code) {
+    var startTime, compiled, currentTransforms, stillOrphanChildren, COMMENT_PATTERN, 
+        error_cnt, error_off, error_la, i, j, hasErr, allShapes;
+
+    startTime = new Date().getTime();
+    compiled = {
+        startShape: null, backColor: null, tile: null, hasZ: false, rules: {},
+        shapes: {CIRCLE: [], SQUARE: [], TRIANGLE: [], ECHO: [], LINE: [], STOPTIME: []}
+    };
+    currentTransforms = []; //This mutates between being an array and a map. It starts as an array then is converted into a map by groupTransforms().
+    stillOrphanChildren = [];
+    
+    function includeFile(file) {//TODO
+    }
+    function startShape(shape) {
+        if (compiled.startShape === null) {
+            compiled.startShape = shape;
+        }
+    }
+    function background() {
+        if (compiled.backColor === null) {
+            if (currentTransforms.length === 0) {
+                currentTransforms = [];
+                return 1;
+            }
+            compiled.backColor = {color: {}};
+            var c = compiled.backColor.color, i;
+            for (i in currentTransforms) {
+                if(currentTransforms.hasOwnProperty(i)) {
+                    c[currentTransforms[i].type] = currentTransforms[i].val;
+                }
+            }
+        }
+        currentTransforms = [];
+        return 0;
+    }
+    function tile() {
+        if (compiled.tile === null) {
+            if (stillOrphanChildren.length === 0) {
+                stillOrphanChildren = [];
+                return 1;
+            }
+            //compiled.tile = stillOrphanChildren[0].transform; IGNORING TILE, AS ITS IMPLEMENTATION IS BROKEN.
+        }
+        stillOrphanChildren = [];
+        return 0;
+    }
+    function sizeF() {
+        if (isNotDefined(compiled.size)) {
+            if (stillOrphanChildren.length === 0) {
+                stillOrphanChildren = [];
+                return 1;
+            }
+            compiled.size = stillOrphanChildren[0];
+        }
+        stillOrphanChildren = [];
+        return 0;
+    }
+    function rule(name, wt) {
+        if (!isNotDefined(compiled.shapes[name])) {
+            CInk.err('Cannot mix rules and shapes with the same name.');
+            stillOrphanChildren = [];
+            return 1;
+        }
+        
+        if (wt <= 0) {
+            wt = 1.0;
+        }
+        if (isNotDefined(compiled.rules[name])) {
+            compiled.rules[name] = {totalWt: 0, def: []};
+        }
+        sortedAscPush(compiled.rules[name].def, {
+            wt: wt,
+            c: stillOrphanChildren
+        });
+        /*compiled.rules[name].def.push({
+            wt: wt,
+            c: stillOrphanChildren
+        });*/
+        compiled.rules[name].totalWt += wt;
+        stillOrphanChildren = [];
+        return 0;
+    }
+    function shortenPathOpName(opName) {
+        var op = opName.match(/^(.+)(REL|TO)$/);
+        if (op !== null) {
+            op = op[1];
+            if (op == 'MOVE')
+                return 'mv';
+            else if (op == 'ARC')
+                return 'ac';
+            else if (op == 'CURVE')
+                return 'cv';
+            else if (op == 'LINE')
+                return 'ln';
+        } else if (opName === 'CLOSEPOLY') {
+            return 'endP';
+        }
+    }
+    function replacement(c, index) {
+        if (isNotDefined(index)) {
+            index = stillOrphanChildren.length - 1;
+        }
+        if (stillOrphanChildren.length > 0) {
+            stillOrphanChildren[index].name = c;
+        }
+    }
+    function loop(c) {
+        var i, children, l;
+        for (i = stillOrphanChildren.length - 1; i >= 0; i -= 1) {
+            if (isNotDefined(stillOrphanChildren[i].name)) {
+                children = stillOrphanChildren.splice(i, stillOrphanChildren.length - i);
+                l = {name: '__loop*', loopTo: c,
+                    adjustments: children.shift(), //Removing the first modification, i.e. adjustment, it has no 'name'.
+                    body: children
+                };
+                stillOrphanChildren.push(l);
+                return 0;
+            }
+        }
+        return 3;
+    }
+    function groupTransforms() {
+        var th = {geo: [], color: {}, txt: [], path: {}, misc: {}}, i, t;
+        
+        for (i = 0; i < currentTransforms.length; i += 1) {
+            t = currentTransforms[i].type;
+            if (indexOf(geoTrans, t) > -1) {
+                th.geo.push(currentTransforms[i]);
+                
+            } else if (indexOf(shadowTrans, t) > -1) {
+                if (isNotDefined(th.misc[t])) {
+                    th.misc[t] = currentTransforms[i].val;
+                }
+                
+            } else if (indexOf(txtTrans, t) > -1) {
+                th.txt.push(currentTransforms[i]);
+                
+            } else if (indexOf(pathTrans, t) > -1) {
+                if (isNotDefined(th.path[t])) {
+                    th.path[t] = currentTransforms[i].val;
+                }
+                
+            } else {
+                th.color[t] = currentTransforms[i].val;
+            }
+        }
+        currentTransforms = th;
+    }
+    function makeGeoUniqueAndOrdered() {
+        var th = {}, g, i, t;
+        g = currentTransforms.geo;
+        for (i = 0; i < g.length; i += 1) {
+            th[g[i].type] = g[i].val;
+        }
+        t = [];
+        for (i = 0; i < geoTrans.length; i += 1) { //This reorders the geo trans in sequence: gx gy x y r s skew f z.
+            if (!isNotDefined(th[geoTrans[i]])) {
+                t.push({type: geoTrans[i], val: th[geoTrans[i]]});
+            }
+        }
+        if (t.length < currentTransforms.geo.length) {
+            CInk.warn("Some geometric transforms could have been dropped from: ", currentTransforms.geo);
+        }
+        currentTransforms.geo = t;
+    }
+    function modificationCaptured() {
+        //Evaluating text transforms here; this will make all transforms in it unique and put less load on Renderer.
+        currentTransforms.txt = evaluteTxtAdjustments(currentTransforms.txt);
+        stillOrphanChildren.push({ transform: currentTransforms });
+        currentTransforms = [];
+    }
+    function checkPathOp(opName) {
+        currentTransforms.path.isRelative = opName.search(/REL$/) !== -1;
+        var p = currentTransforms.path.p, p1 = currentTransforms.path.p1;
+        if (!isNotDefined(p)) {
+            if (opName === 'ARCTO' || opName === 'ARCREL') {
+                if (!isNotDefined(p) && p !== 'large') {
+                    CInk.err("Invalid paramenter for " + opName + ". Only 'cw' and 'large' allowed. Given: ", p);
+                    return -1;
+                }
+            } else if (opName === 'CLOSEPOLY') {
+                if (!isNotDefined(p)) {
+                    if (p === 'align') {
+                        CInk.warn("Parameter not supported for CLOSEPOLY. It will be ignored.");
+                    } else {
+                        CInk.err("Invalid paramenter for CLOSEPOLY. Only 'align' is allowed. Given: ", p);
+                        return -1;
+                    }
+                }
+            } else {
+                CInk.err("Paramenter not allowed for " + opName + ". Given: ", p);
+                return -1;
+            }
+        }
+        if (!isNotDefined(p1)) {
+            if (opName === 'ARCTO' || opName === 'ARCREL') {
+                if (p1 !== 'cw') {
+                    CInk.err("Invalid paramenter for " + opName + ". Only 'cw' and 'large' allowed. Given: ", p1);
+                    return -1;
+                }
+            } else if (opName === 'CLOSEPOLY') {                
+                CInk.err("Invalid paramenter for CLOSEPOLY. Only 'align' is allowed. Given: ", p1);
+                return -1;
+            } else {
+                CInk.err("Paramenter not allowed for " + opName + ". Given: ", p1);
+                return -1;
+            }
+        }
+        return 0;
+    }
+    function checkPathCmd(cmdName) {
+        var path;
+        if (cmdName !== 'FILL' && cmdName !== 'STROKE') {
+            CInk.err('Only FILL and STROKE are valid path commands. Given: ', cmdName);
+            return -1;
+        }
+        if (stillOrphanChildren.length > 0) {
+            path = stillOrphanChildren[stillOrphanChildren.length - 1].transform.path;
+            if (cmdName === 'FILL') {
+                if (!isNotDefined(path.stw)) {
+                    CInk.err('Stroke width cannot be specified for FILL command.');
+                    return -1;
+                }
+                if (!isNotDefined(path.p)) {
+                    if (path.p === 'evenodd') {
+                        CInk.warn('Parameter for FILL is not supported, and will be ignored.');
+                    } else {
+                        CInk.err("FILL can accept only 'evenodd' as parameter. Given: ", path.p);
+                        return -1;
+                    }
+                }
+            } else { //It is STROKE then.
+                if (!isNotDefined(path.p)) {
+                    if (path.p === 'miterjoin') {
+                        path.p = 'miter';
+                    } else if (path.p === 'roundjoin') {
+                        path.p = 'round';
+                    } else if (path.p === 'beveljoin') {
+                        path.p = 'bevel';
+                    } else {
+                        CInk.err("STROKE can accept only 'miterjoin', 'roundjoin' or  'beveljoin' as join parameter. Given: ", path.p);
+                        return -1;
+                    }
+                }
+                if (!isNotDefined(path.p1)) {
+                    if (path.p1 === 'buttcap') {
+                        path.p1 = 'butt';
+                    } else if (path.p1 === 'roundcap') {
+                        path.p1 = 'round';
+                    } else if (path.p1 === 'squarecap') {
+                        path.p1 = 'square';
+                    } else {
+                        CInk.err("STROKE can accept only 'buttcap', 'roundcap' or  'squarecap' as cap parameter. Given: ", path.p1);
+                        return -1;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+    function path(name) {
+        if (!isNotDefined(compiled.shapes[name]) || !isNotDefined(compiled.rules[name])) {
+            CInk.err('Duplicate definition. This path is already defined as a path or rule.');
+            stillOrphanChildren = [];
+            return 1;
+        }
+        compiled.shapes[name] = stillOrphanChildren;
+        stillOrphanChildren = [];
+        return 0;
+    }
+    
+    function pointX(v, i) {
+        var k = (i == 0 ? 'x0' : (i == 1 ? 'x1' : 'x2'));
+        currentTransforms.push({type: k, val: v});
+    }
+    function pointY(v, i) {
+        var k = (i == 0 ? 'y0' : (i == 1 ? 'y1' : 'y2'));
+        currentTransforms.push({type: k, val: v});
+    }
+    function radiusX(r) {
+        if (r === 0) {
+            CInk.warn("Setting rx to 1, since zero is not allowed for rx. Given ", r);
+            r = 1;
+        }
+        currentTransforms.push({type: 'rx', val: r});
+    }
+    function radiusY(r) {
+        if (r === 0) {
+            CInk.warn("Setting ry to 1, since zero is not allowed for ry. Given ", r);
+            r = 1;
+        }
+        currentTransforms.push({type: 'ry', val: r});
+    }
+    function radius(r) {
+        currentTransforms.push({type: 'rad', val: r});
+    }
+    function parameters(p) {
+        var t = 'p';
+        if (p === 'buttcap' || p === 'roundcap' || p === 'squarecap' || p === 'cw') {
+            t = 'p1';
+        }
+        currentTransforms.push({type: t, val: p});
+    }
+    function size(x, y, z) {
+        currentTransforms.push({type: 's', val: {x:x, y:y, z:z}});
+    }
+    function zLocation(z) {
+        currentTransforms.push({type: 'z', val: z});
+        compiled.hasZ = true;
+    }
+    function xGlobal(x) {
+        currentTransforms.push({type: 'gx', val: x});
+    }
+    function yGlobal(y) {
+        currentTransforms.push({type: 'gy', val: y});
+    }
+    function xLocation(x) {
+        currentTransforms.push({type: 'x', val: x});
+    }
+    function yLocation(y) {
+        currentTransforms.push({type: 'y', val: y});
+    }
+    function skew(y, x) {
+        currentTransforms.push({type: 'skew', val: {x:x, y:y}});
+    }
+    function reflection(num) {
+        currentTransforms.push({type: 'f', val: num});
+    }
+    function orientation(num) {
+        currentTransforms.push({type: 'r', val: num});
+    }
+    function functionType(name, argC) {
+        if (isNotDefined(predefinedFuncs[name])) {
+            return -1;
+        }
+        if (predefinedFuncs[name].agc !== argC) {
+            return -2;
+        }
+        return predefinedFuncs[name].f;
+    }
+    function expFunction(fType) {
+        var args = Array.prototype.slice.call(arguments);
+        args.shift(fType);
+        return fType.apply(this, args );
+    }
+    function hue(v, isTargetValue) {
+        var type = 'h';
+        if (isTargetValue) {
+            type = 'h_';
+        }
+        currentTransforms.push({type: type, val: v});
+    }
+    function saturation(v, isTargetValue) {
+        var type = 'sat';
+        if (isTargetValue) {
+            type = 'sat_';
+        }
+        currentTransforms.push({type: type, val: v});
+    }
+    function brightness(v, isTargetValue) {
+        var type = 'b';
+        if (isTargetValue) {
+            type = 'b_';
+        }
+        currentTransforms.push({type: type, val: v});
+    }
+    function alpha(v, isTargetValue) {
+        var type = 'a';
+        if (isTargetValue) {
+            type = 'a_';
+        }
+        currentTransforms.push({type: type, val: v});
+    }
+    function hueTarget(v) {
+        currentTransforms.push({type: '_h', val: v});
+    }
+    function saturationTarget(v) {
+        currentTransforms.push({type: '_sat', val: v});
+    }
+    function brightnessTarget(v) {
+        currentTransforms.push({type: '_b', val: v});
+    }
+    function alphaTarget(v) {
+        currentTransforms.push({type: '_a', val: v});
+    }
+    function shadowOffsetX(v) {
+        currentTransforms.push({type: 'shx', val: v});
+    }
+    function shadowOffsetY(v) {
+        currentTransforms.push({type: 'shy', val: v});
+    }
+    function shadowBlur(v) {
+        currentTransforms.push({type: 'shblur', val: v});
+    }
+    function shadowHue(v) {
+        currentTransforms.push({type: 'shh', val: v});
+    }
+    function shadowSaturation(v) {
+        currentTransforms.push({type: 'shsat', val: v});
+    }
+    function shadowBrightness(v) {
+        currentTransforms.push({type: 'shb', val: v});
+    }
+    function shadowAlpha(v) {
+        currentTransforms.push({type: 'sha', val: v});
+    }
+    function tileDim(v) {
+        compiled.tileH = v;
+    }
+    function allow(opt) {
+        opt = opt.toUpperCase();
+        /*switch (opt) {
+        default: return -1;
+        }
+        return 0;*/
+        return -1;
+    }
+    function deny(opt) {
+        opt = opt.toUpperCase();
+        switch (opt) {
+        case 'INTILING': compiled.inTiling = false; break;
+        case 'CORRECTARCP': compiled.correctArcP = false; break;
+        default: return -1;
+        }
+        return 0;
+    }
+    function textAppend(t) {
+        currentTransforms.push({type: 't', val: t});
+    }
+    function textAppendUsingLast(n) {
+        if (Math.floor(n) !== n) {
+            CInk.err("Cannot accept fractional value for |t. Given: ", n);
+            return 1;
+        }
+        n = Math.ceil(n);
+        currentTransforms.push({type: '_t', val: n});
+        return 0;
+    }
+    function bckSpc() {
+        currentTransforms.push({type: 'bkspc', val: true});
+    }
+    function truncateText() {
+        currentTransforms.push({type: 'e', val: true});
+    }
+    function fontName(n) {
+        currentTransforms.push({type: 'fn', val: n});
+    }
+    function fontSize(s) {
+        currentTransforms.push({type: 'fs', val: s});
+    }
+    function fontUnit(u) {
+        u = u.toLowerCase();
+        if (u !== 'pt' && u !== 'px' && u !== 'em') {
+            CInk.err('Invalid font unit. It must be either of pt, px or em. Given: ', u);
+            return 1;
+        }
+        currentTransforms.push({type: 'fu', val: u});
+        return 0;
+    }
+    function fontStyle(s) {
+        s = s.toLowerCase();
+        if (s !== 'italic' && s !== 'bold' && s !== 'cap' && s !== 'normal') {
+            CInk.err('Invalid font style. It must be either of italic, bold, cap or normal. Given: ', s);
+            return 1;
+        }
+        currentTransforms.push({type: 'fstyle', val: s});
+        return 0;
+    }
+    function strokeText() {
+        currentTransforms.push({type: 'st', val: true});
+    }
+    function textAlign(a) {
+        a = a.toLowerCase();
+        if (a !== 'left' && a !== 'right' && a !== 'center' && a !== 'start' && a !== 'end') {
+            CInk.err('Invalid font alignment. It must be either of left, right, center, start or end. Given: ', a);
+            return 1;
+        }
+        currentTransforms.push({type: 'align', val: a});
+        return 0;
+    }
+    function textBaseline(b) {
+        b = b.toLowerCase();
+        if (b !== 'top' && b !== 'hanging' && b !== 'middle' && b !== 'alphabetic' && b !== 'ideographic' && b !== 'bottom') {
+            CInk.err('Invalid font baseline. It must be either of top, hanging, middle, alphabetic, ideographic or bottom. Given: ', b);
+            return 1;
+        }
+        currentTransforms.push({type: 'base', val: b});
+        return 0;
+    }
+    function strokeWidth(w, isPath) {
+        currentTransforms.push({type: (isPath ? 'stw' : 'sw'), val: w});
+    }
+*]
+    
+<    '\-'
+    '\+'
+    ;
+    
+<    '\*'
+    '\/'
+    ;
+
+<    '^'
+    ;
+
+>    '!'
+    ;
+    
+    "startshape"    STARTSHAPE
+    "background"    BACKGROUND
+    "include"       INCLUDE
+    "tile"          TILE
+    "rule"          RULE
+    "path"          PATH
+    '{'
+    '}'
+    '\['
+    '\]'
+    '\('
+    '\)'
+    ','
+    "rotate"        ROTATE
+    "r"             ROTATE
+    "flip"          FLIP
+    "f"             FLIP
+    "hue"           HUE
+    "h"             HUE
+    "saturation"    SATURATION
+    "sat"           SATURATION
+    "brightness"    BRIGHTNESS
+    "b"             BRIGHTNESS
+    "alpha"         ALPHA
+    "a"             ALPHA
+    "x"             XSHIFT
+    "y"             YSHIFT
+    "x1"            XCTRL1
+    "y1"            YCTRL1
+    "rx"            XRADIUS
+    "ry"            YRADIUS
+    "x2"            XCTRL2
+    "y2"            YCTRL2
+    "z"             ZSHIFT
+    "size"          SIZE
+    "s"             SIZE
+    "skew"          SKEW
+    "\|hue"         TARGETHUE
+    "\|h"           TARGETHUE
+    "\|saturation"  TARGETSATURATION
+    "\|sat"         TARGETSATURATION
+    "\|brightness"  TARGETBRIGHTNESS
+    "\|b"           TARGETBRIGHTNESS
+    "\|alpha"       TARGETALPHA
+    "\|a"           TARGETALPHA
+    '\|'
+    "param"         PARAMETERS
+    "p"             PARAMETERS
+    "width"         STROKEWIDTH
+    "allow"         ALLOW
+    "deny"          DENY
+    "tiledim"       TILEDIM
+    "sw"            NONPATHSTROKEWIDTH
+    "gx"            GLOBALX
+    "gy"            GLOBALY
+    ;
+    
+    "t"             TEXT
+    "\|t"           PIPETEXT
+    "e"             EMPTYOUTTEXT
+    "bkspc"         BACKSPC
+    "fn"            FONTNAME
+    "fs"            FONTSIZE
+    "fu"            FONTUNIT
+    "fstyle"        FONTSTYLE
+    "st"            STROKETEXT
+    "ft"            FILLTEXT
+    "base"          TEXTBASELINE
+    "align"         TEXTALIGN
+    ;
+    
+    "shx"           SHADOWOFFSETX
+    "shy"           SHADOWOFFSETY
+    "shblur"        SHADOWBLUR
+    "shh"           SHADOWHUE
+    "shsat"         SHADOWSATURATION
+    "shb"           SHADOWBRIGHTNESS
+    "sha"           SHADOWALPHA
+    ;
+    
+    'MOVETO|LINETO|ARCTO|CURVETO|MOVEREL|LINEREL|ARCREL|CURVEREL|CLOSEPOLY'         PATHOP
+    ;
+    
+    '([0-9]+\.[0-9]*)|(\.[0-9]+)|[0-9]+'                                            RATIONAL
+    '[a-zA-Z\200-\376_]+[a-zA-Z_0-9\200-\376]*'                                     STRING
+    '[a-zA-Z\200-\376_0-9]+|\"[ \043-\176!\200-\376]+\"'                            NORMALSTRING
+    ;
+    
+    '([a-zA-Z\200-\376][a-zA-Z\200-\376_\-0-9\.]*\.cfdg)|(\"[^\n\r\f\"]*\")'        FILENAME
+    ;
+    
+!    '.|\n|\r'                                                                      /~ eat up any unmatched character ~/
+    ;
+
+##
+
+/~ Time for production rules ~/
+
+cfdg:
+        cfdg statement
+        |
+        ;
+        
+statement:
+          initialization
+        | background  
+        | inclusion
+        | tile
+        | size
+        | rule
+        | path
+        ;
+        
+inclusion:
+        INCLUDE user_string                                     [* includeFile(%2); *]
+        |
+        INCLUDE FILENAME                                        [* includeFile(%2.replace(/"/g, '')); *]
+        ;
+
+initialization:
+        STARTSHAPE user_string                                  [* startShape(%2); *]
+        ;
+
+background:
+        BACKGROUND '{' buncha_color_adjustments '}'             [* /* Set current evaluated color as background */
+                                                                    if (background() !== 0) { CInk.err("background{} has invalid parameters."); return -1; } *]
+        ;
+
+tile:
+        TILE modification                                       [* if (tile() !== 0) { CInk.err("tile{} has invalid parameters."); return -1; } *]
+        ;
+
+size:
+        SIZE modification                                       [* if (sizeF() !== 0) { CInk.err("size{} has invalid parameters."); return -1; } *]
+        ;
+
+rule:
+        RULE user_string '{' buncha_replacements '}'            [* if (rule(%2, 1) !== 0) { CInk.err("rule " + %2 + "{} is invalid."); return -1; } *]
+        |
+        RULE user_string RATIONAL '{' buncha_replacements '}'   [* if (rule(%2, 1 * %3) !== 0) { CInk.err("rule " + %2 + " " + %3 + "{} is invalid."); return -1; } *]
+        ;
+
+path:
+        PATH user_string    '{' buncha_pathOps '}'              [* if (path(%2) !== 0) { CInk.err("path " + %2 + "{} is invalid."); return -1; } *]
+        ;
+
+allow:
+        ALLOW user_string                                       [* if (allow(%2) !== 0) { CInk.err("Not a valid option for 'allow'."); return -1; } *]
+        ;
+        
+deny:
+        DENY user_string                                        [* if (deny(%2) !== 0) { CInk.err("Not a valid option for 'deny'."); return -1; } *]
+        ;
+        
+tiledim:
+        TILEDIM RATIONAL                                        [* tileDim(1 * %2); *]
+        ;
+        
+user_string:
+        STRING
+        | ROTATE
+        | FLIP
+        | HUE
+        | SATURATION
+        | BRIGHTNESS
+        | ALPHA
+        | XSHIFT
+        | YSHIFT
+        | XCTRL1
+        | YCTRL1
+        | XRADIUS
+        | YRADIUS
+        | XCTRL2
+        | YCTRL2
+        | ZSHIFT
+        | SIZE
+        | SKEW
+        | PARAMETERS
+        | STROKEWIDTH
+        | NONPATHSTROKEWIDTH
+        | TILEDIM
+        | TEXT
+        | EMPTYOUTTEXT
+        | BACKSPC
+        | FONTNAME
+        | FONTSIZE
+        | FONTUNIT
+        | FONTSTYLE
+        | STROKETEXT
+        | FILLTEXT
+        | TEXTBASELINE
+        | TEXTALIGN
+        | GLOBALX
+        | GLOBALY
+        | SHADOWOFFSETX
+        | SHADOWOFFSETY
+        | SHADOWBLUR
+        | SHADOWHUE
+        | SHADOWSATURATION
+        | SHADOWBRIGHTNESS
+        | SHADOWALPHA
+        ;
+        
+buncha_pathOps: 
+        buncha_pathOps pathOp
+        |
+        ;
+
+pathOp:
+        PATHOP '{' points '}'                                   [*  groupTransforms();
+                                                                    if (checkPathOp(%1) !== 0) {
+                                                                        return -1;
+                                                                    }
+                                                                    modificationCaptured();
+                                                                    replacement(shortenPathOpName(%1));
+                                                                *]
+        |
+        RATIONAL '*' path_modification PATHOP '{' points '}'    [*  groupTransforms();
+                                                                    if (checkPathOp(%4) !== 0) {
+                                                                        return -1;
+                                                                    }
+                                                                    modificationCaptured();
+                                                                    replacement(shortenPathOpName(%4));
+                                                                    if (loop(1 * %1) !== 0) {
+                                                                        CInk.err("loop " + %1 + "  is invalid.");
+                                                                        return -1;
+                                                                    }
+                                                                *]
+        |
+        RATIONAL '*' path_modification '{' buncha_pathOps '}'   [*  
+                                                                    if (loop(1 * %1) !== 0) {
+                                                                        CInk.err("loop " + %1 + "  is invalid.");
+                                                                        return -1;
+                                                                    }
+                                                                *]
+        |
+        STRING path_modification                                [*  //Since modificationCaptured() would have been called so check in stillOrphanChildren[last]
+                                                                    if (checkPathCmd(%1) !== 0) {
+                                                                        return -1;
+                                                                    }
+                                                                    replacement(%1);
+                                                                *]
+        |
+        RATIONAL '*' path_modification STRING path_modification [*  //Since modificationCaptured() would have been called so check in stillOrphanChildren[last]
+                                                                    if (checkPathCmd(%4) !== 0) {
+                                                                        return -1;
+                                                                    }
+                                                                    replacement(%4);
+                                                                    if (loop(1 * %1) !== 0) {
+                                                                        CInk.err("loop " + %1 + "  is invalid.");
+                                                                        return -1;
+                                                                    }
+                                                                *]
+        ;
+
+points:
+        points point
+        |
+        ;
+
+point:
+        XSHIFT exp                                              [* pointX(1 * %2, 0); *]
+        |
+        XCTRL1 exp                                              [* pointX(1 * %2, 1); *]
+        |
+        XCTRL2 exp                                              [* pointX(1 * %2, 2); *]
+        |
+        YSHIFT exp                                              [* pointY(1 * %2, 0); *]
+        |
+        YCTRL1 exp                                              [* pointY(1 * %2, 1); *]
+        |
+        YCTRL2 exp                                              [* pointY(1 * %2, 2); *]
+        |
+        XRADIUS exp                                             [* radiusX(1 * %2); *]
+        |
+        YRADIUS exp                                             [* radiusY(1 * %2); *]
+        |
+        ROTATE exp                                              [* radius(1 * %2); *]
+        |
+        PARAMETERS STRING                                       [* parameters(%2); *]
+        ;
+
+buncha_replacements: 
+        buncha_replacements replacement
+        |
+        ;
+
+replacement:
+        user_string modification                                [* replacement(%1); *]
+        |
+        RATIONAL '*' modification user_string modification      [*
+                                                                    replacement(%4);
+                                                                    if (loop(1 * %1) !== 0) {
+                                                                        CInk.err("loop " + %1 + "  is invalid.");
+                                                                        return -1;
+                                                                    }
+                                                                *]
+        |
+        RATIONAL '*' modification '{' buncha_replacements '}'   [*
+                                                                    if (loop(1 * %1) !== 0) {
+                                                                        CInk.err("loop " + %1 + "  is invalid.");
+                                                                        return -1;
+                                                                    }
+                                                                *]
+        ;
+        
+modification:
+        '{' buncha_adjustments '}'                              [* groupTransforms(); makeGeoUniqueAndOrdered(); modificationCaptured(); *]
+        |
+        '[' buncha_adjustments ']'                              [* groupTransforms(); modificationCaptured(); *]
+        ;
+
+path_modification:
+        '{' buncha_path_adjustments '}'                         [* groupTransforms(); makeGeoUniqueAndOrdered(); modificationCaptured(); *]
+        |
+        '[' buncha_path_adjustments ']'                         [* groupTransforms(); modificationCaptured(); *]
+        ;
+
+buncha_path_adjustments:
+        buncha_path_adjustments path_adjustment
+        |
+        ;
+
+path_adjustment:
+        geom_adjustment
+        |
+        color_adjustment
+        |
+        shadow_adjustment
+        |
+        PARAMETERS STRING                                       [* parameters(%2); *]
+        |
+        STROKEWIDTH exp                                         [* strokeWidth(1 * %2, true); *]
+        |
+        ZSHIFT exp                                              [* CInk.err("Z changes are not allowed in paths."); return -1; *]
+        |
+        SIZE exp exp exp                                        [* CInk.err("Z changes are not allowed in paths. The 3rd parameter in 'size' is for z.");
+                                                                   return -1; *]
+        ;
+
+buncha_adjustments:
+        buncha_adjustments adjustment
+        |
+        ;
+
+buncha_color_adjustments:
+        buncha_color_adjustments color_adjustment
+        |
+        ;
+
+adjustment:
+        text_adjustment
+        |
+        geom_adjustment
+        |
+        color_adjustment
+        |
+        shadow_adjustment
+        |
+        ZSHIFT exp                                              [* zLocation(1 * %2); *]
+        |
+        SIZE exp exp exp                                        [* size(1 * %2, 1 * %3, 1 * %4); *]
+        |
+        PARAMETERS STRING                                       [* CInk.err("Parameters are not allowed in rules"); return -1; *]
+        |
+        NONPATHSTROKEWIDTH exp                                  [* strokeWidth(1 * %2, false); *]
+        |
+        STROKEWIDTH exp                                         [* CInk.err("This is a Path stroke width. Instead use 'sw' here."); return -1; *]
+        ;
+
+text_adjustment:
+        EMPTYOUTTEXT                                            [* truncateText(); *]
+        | BACKSPC                                               [* bckSpc(); *]
+        | PIPETEXT rational                                     [* if (textAppendUsingLast(1 * %2) !== 0) return -1; *]
+        | TEXT normal_string                                    [* textAppend(%2.replace(/"/g, '')); *]
+        | TEXT rational                                         [* textAppend(%2); *]
+        | FONTNAME NORMALSTRING                                 [* fontName(%2.replace(/"/g, '')); *]
+        | FONTSIZE RATIONAL                                     [* fontSize(1 * %2); *]
+        | FONTUNIT STRING                                       [* if (fontUnit(%2) !== 0) return -1; *]
+        | FONTSTYLE STRING                                      [* if (fontStyle(%2) !== 0) return -1; *]
+        | STROKETEXT                                            [* strokeText(true); *]
+        | FILLTEXT                                              [* strokeText(false); *]
+        | TEXTALIGN    STRING                                   [* if (textAlign(%2) !== 0) return -1; *]
+        | TEXTBASELINE STRING                                   [* if (textBaseline(%2) !== 0) return -1; *]
+        ;
+
+rational:
+        RATIONAL                                                [* %% = %1; *]
+        |
+        '-' RATIONAL                    &'*'                    [* %% = -1 * %2; *]
+        |
+        '+' RATIONAL                    &'*'                    [* %% = %2; *]
+        ;
+        
+normal_string:
+        NORMALSTRING
+        |
+        user_string
+        ;
+        
+geom_adjustment:
+        ROTATE exp                                              [* orientation(1 * %2); *]
+        |
+        FLIP exp                                                [* reflection(1 * %2); *]
+        |
+        XSHIFT exp                                              [* xLocation(1 * %2); *]
+        |
+        YSHIFT exp                                              [* yLocation(1 * %2); *]
+        |
+        SIZE exp                                                [* size(1 * %2, 1 * %2, 1.0); *]
+        |
+        SIZE exp exp                                            [* size(1 * %2, 1 * %3, 1.0); *]
+        |
+        SKEW exp exp                                            [* skew(1 * %2, 1 * %3); *]
+        |
+        GLOBALX exp                                             [* xGlobal(1 * %2); *]
+        |
+        GLOBALY exp                                             [* yGlobal(1 * %2); *]
+        ;
+
+shadow_adjustment:
+        SHADOWOFFSETX exp                                       [* shadowOffsetX(1 * %2); *]
+        |
+        SHADOWOFFSETY exp                                       [* shadowOffsetY(1 * %2); *]
+        |
+        SHADOWBLUR exp                                          [* shadowBlur(1 * %2); *]
+        |
+        SHADOWHUE exp                                           [*  var v = 1 * %2;
+                                                                    shadowHue(v);
+                                                                *]
+        |
+        SHADOWBRIGHTNESS exp                                    [*  var v = 1 * %2;
+                                                                    if (v < -1) {
+                                                                        CInk.warn("Brightness should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if (v > 1) {
+                                                                        CInk.warn("Brightness should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    shadowBrightness(v);
+                                                                *]
+        |
+        SHADOWSATURATION exp                                    [*  var v = 1 * %2;
+                                                                    if (v < -1) {
+                                                                        CInk.warn("Saturation should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if (v > 1) {
+                                                                        CInk.warn("Saturation should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    shadowSaturation(v);
+                                                                *]
+        |
+        SHADOWALPHA exp                                         [*  var v = 1 * %2;
+                                                                    if(v < -1) {
+                                                                        CInk.warn("Alpha should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if(v > 1) {
+                                                                        CInk.warn("Alpha should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    shadowAlpha(v);
+                                                                *]
+        ;
+        
+color_adjustment:
+        HUE exp                                                 [*  var v = 1 * %2;
+                                                                    hue(v);
+                                                                *]
+        |
+        SATURATION exp                                          [*  var v = 1 * %2;
+                                                                    if (v < -1) {
+                                                                        CInk.warn("Saturation should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if (v > 1) {
+                                                                        CInk.warn("Saturation should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    saturation(v);
+                                                                *]
+        |
+        BRIGHTNESS exp                                          [*  var v = 1 * %2;
+                                                                    if (v < -1) {
+                                                                        CInk.warn("Brightness should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if (v > 1) {
+                                                                        CInk.warn("Brightness should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    brightness(v);
+                                                                *]
+        |
+        ALPHA exp                                               [*  var v = 1 * %2;
+                                                                    if(v < -1) {
+                                                                        CInk.warn("Alpha should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if(v > 1) {
+                                                                        CInk.warn("Alpha should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    alpha(v);
+                                                                *]
+        |
+        HUE exp '|'                                             [*  var v = 1 * %2;
+                                                                    hue(v, true); /*true is to set isTargetValue arg to true.*/
+                                                                *]
+        |
+        SATURATION exp '|'                                      [*  var v = 1 * %2;
+                                                                    if (v < -1) {
+                                                                        CInk.warn("Saturation targetting should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if (v > 1) {
+                                                                        CInk.warn("Saturation targetting should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    saturation(v, true);
+                                                                *]
+        |
+        BRIGHTNESS exp '|'                                      [*  var v = 1 * %2;
+                                                                    if (v < -1) {
+                                                                        CInk.warn("Brightness targetting should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if (v > 1) {
+                                                                        CInk.warn("Brightness targetting should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    brightness(v, true);
+                                                                *]
+        |
+        ALPHA exp '|'                                           [*  var v = 1 * %2;
+                                                                    if (v < -1) {
+                                                                        CInk.warn("Alpha targetting should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if (v > 1) {
+                                                                        CInk.warn("Alpha targetting should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    alpha(v, true);
+                                                                *]
+        |
+        TARGETHUE exp                                           [*  var v = 1 * %2;
+                                                                    hueTarget(v);
+                                                                *]
+        |
+        TARGETSATURATION exp                                    [*  var v = 1 * %2;
+                                                                    if (v < -1) {
+                                                                        CInk.warn("Target saturation should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if (v > 1) {
+                                                                        CInk.warn("Target saturation should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    saturationTarget(v);
+                                                                *]
+        |
+        TARGETBRIGHTNESS exp                                    [*  var v = 1 * %2;
+                                                                    if (v < -1) {
+                                                                        CInk.warn("Target brightness should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if (v > 1) {
+                                                                        CInk.warn("Target brightness should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    brightnessTarget(v);
+                                                                *]
+        |
+        TARGETALPHA exp                                         [*  var v = 1 * %2;
+                                                                    if (v < -1) {
+                                                                        CInk.warn("Target alpha should be in [-1,1] range. Given:", v, "Picking -1 instead.");
+                                                                        v = -1;
+                                                                    }
+                                                                    if (v > 1) {
+                                                                        CInk.warn("Target alpha should be in [-1,1] range. Given:", v, "Picking 1 instead.");
+                                                                        v = 1;
+                                                                    }
+                                                                    alphaTarget(v);
+                                                                *]
+        ;
+
+exp:
+        RATIONAL                                                [*  %% = 1 * %1; /*Multiplying by 1 to cast it to number.*/ *]
+        |
+        '-' RATIONAL                    &'*'                    [*  %% = -1 * %2; *]
+        |
+        '+' RATIONAL                    &'*'                    [*  %% = %2; *]
+        |
+        '(' exp2 ')'                                            [*  %% = %2; *]
+        | 
+        STRING '(' ')'                                          [*  var fType = functionType(%1, 0);
+                                                                    if (fType === -1) {
+                                                                        CInk.err("Function " + %1 + "() is not an accepted function.");
+                                                                        return -1;
+                                                                    }
+                                                                    %% = expFunction(fType, 0.0, 0.0);
+                                                                *]
+        |
+        STRING '(' exp2 ')'                                     [*  var fType = functionType(%1, 1);
+                                                                    if (fType === -1) {
+                                                                        CInk.err("Function " + %1 + "() is not an accepted function.");
+                                                                        return -1;
+                                                                    }
+                                                                    if (fType === -2) {
+                                                                        CInk.err("Function " + %1 + "() doesn't have required number of arguments.");
+                                                                        return -1;
+                                                                    }
+                                                                    %% = expFunction(fType, %3, 0.0);
+                                                                *]
+        | 
+        STRING '(' exp2 ',' exp2 ')'                            [*  var fType = functionType(%1, 2);
+                                                                    if (fType === -1) {
+                                                                        CInk.err("Function " + %1 + "() is not an accepted function.");
+                                                                        return -1;
+                                                                    }
+                                                                    if (fType === -2) {
+                                                                        CInk.err("Function " + %1 + "() doesn't have required number of arguments.");
+                                                                        return -1;
+                                                                    }
+                                                                    %% = expFunction(fType, %3, %5);
+                                                                *]
+        ;
+
+exp2: 
+        RATIONAL                                                [*  %% = 1 * %1; *]
+        | 
+        STRING '(' ')'                                          [*  var fType = functionType(%1, 0);
+                                                                    if (fType === -1) {
+                                                                        CInk.err("Function " + %1 + "() is not an accepted function.");
+                                                                        return -1;
+                                                                    }
+                                                                    %% = expFunction(fType, 0.0, 0.0);
+                                                                *]
+        |
+        STRING '(' exp2 ')'                                     [*  var fType = functionType(%1, 1);
+                                                                    if (fType === -1) {
+                                                                        CInk.err("Function " + %1 + "() is not an accepted function.");
+                                                                        return -1;
+                                                                    }
+                                                                    if (fType === -2) {
+                                                                        CInk.err("Function " + %1 + "() doesn't have required number of arguments.");
+                                                                        return -1;
+                                                                    }
+                                                                    %% = expFunction(fType, %3, 0.0);
+                                                                *]
+        | 
+        STRING '(' exp2 ',' exp2 ')'                            [*  var fType = functionType(%1, 2);
+                                                                    if (fType === -1) {
+                                                                        CInk.err("Function " + %1 + "() is not an accepted function.");
+                                                                        return -1;
+                                                                    }
+                                                                    if (fType === -2) {
+                                                                        CInk.err("Function " + %1 + "() doesn't have required number of arguments.");
+                                                                        return -1;
+                                                                    }
+                                                                    %% = expFunction(fType, %3, %5);
+                                                                *]
+        | 
+        exp2 '+' exp2                                           [* %% = %1 + 1 * %3; *]
+        | 
+        exp2 '-' exp2                                           [* %% = 1 * %1 - %3; *]
+        | 
+        exp2 '*' exp2                                           [* %% = %1 * %3; *]
+        | 
+        exp2 '/' exp2                                           [* %% = %1 / %3; *]
+        | 
+        '-' exp2                        &'*'                    [* %% = -1 * %2; *]
+        | 
+        '+' exp2                        &'*'                    [* %% = %2; *]
+        | 
+        exp2 '^' exp2                                           [* %% = Math.pow(1 * %1, 1 * %3); *]
+        | 
+        '(' exp2 ')'                                            [* %% = %2; *]
+        ;
+
+[*
+    COMMENT_PATTERN = /((\/\/)|#).*$|\/\*[\s\S]*\*\//gm;
+    //Removing all comments.
+    code = code.replace(COMMENT_PATTERN, '');
+
+    error_cnt = 0;
+    error_off = [];
+    error_la = [];
+    //_##PREFIX##dbg_withtrace = true; //TEST
+    if ((error_cnt = __##PREFIX##parse(code, error_off, error_la)) > 0) {
+        for (i = 0; i < error_cnt; i += 1 ) {
+            CInk.err("Parse error near \""
+                + code.substr(error_off[i], 10) +
+                ((code.length > error_off[i] + 10) ? "..." : "") +
+                "\", expecting \"" + error_la[i].join() + "\"");
+        }
+        return null;
+    }
+
+    //VALIDATIONS
+    hasErr = error_cnt !== 0;
+    if (isNotDefined(compiled.startShape) ||
+        (isNotDefined(compiled.rules[compiled.startShape]) && isNotDefined(compiled.shapes[compiled.startShape]))) {
+        CInk.err("startshape '" + compiled.startShape + "' is not defined or it mentions a non-existent rule or shape.");
+        hasErr = true;
+    }
+    
+    function checkShapesExist(ruleName, ruleWt, shapes) {
+        var isErr = false, i;
+        for(i=0; i < shapes.length; i += 1) {
+            if(shapes[i].name === '__loop*') {
+                if (!checkShapesExist(ruleName, ruleWt, shapes[i].body))
+                    isErr = true;
+            } else if (isNotDefined(compiled.rules[shapes[i].name]) &&
+                       isNotDefined(compiled.shapes[shapes[i].name])) {
+                CInk.err("Rule or shape '" + shapes[i].name + "' referred by rule "
+                    + ruleName + " with wt " + ruleWt + " doesn't exist.");
+                isErr = true;
+            }
+        }
+        return !isErr;
+    }
+    
+    for (i in compiled.rules) {
+        if (compiled.rules.hasOwnProperty(i)) {
+            allShapes = compiled.rules[i].def;
+            for( j = 0; j < allShapes.length; j += 1) {
+                if (!checkShapesExist(i, allShapes[j].wt, allShapes[j].c))
+                    hasErr = true;
+            }
+        }
+    }
+    
+    if (!isNotDefined(compiled.rules.TIME)) {
+        if (compiled.rules.TIME.def.length > 1) {
+            CInk.err("Only one TIME rule can be defined. CInk cannot determine which TIME to invoke when there are multiple.");
+            hasErr = true;
+        }
+    }
+    
+    if(console.log) {
+        console.log('compiled code:', compiled);
+    }
+    CInk.log('Compilation done in ', ((new Date().getTime() - startTime) / 1000.0) + 's');
+    if(hasErr) {
+        return null;
+    }
+    
+    return compiled;
+}; //End of Compile()
+})(); //End of anonymous wrapper function.
+*]
