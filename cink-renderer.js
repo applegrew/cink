@@ -365,6 +365,40 @@
         }
         params.rendererVar = CInk.compileAndRun(params.rawCode, params.canvas, params.callBackOnFinish, params.getMeta, params.variant, params.slowClear);
     };
+    CInk.resetAndRun = function resetAndRun(params) { //It doesn't compile. All params of resetCompileAndRun are supported, except,
+                                                      //replace params.rawCode by params.compiledCode.
+        var canvas, ctx, renderer, variName, w;
+        if (!isNotDefined(params.rendererVar)) {
+            params.rendererVar.shutAndDispose(function () {
+                params.rendererVar = null;
+                CInk.resetAndRun(params);
+            });
+            return;
+        }
+        canvas = params.canvas;
+        if (!isNotDefined(canvas)) {
+            if (params.slowClear) {
+                //Chrome has a bug where it fails to render strokeText after canvas has been resized.
+                //http://code.google.com/p/chromium/issues/detail?id=44017
+                ctx = canvas.getContext('2d');
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                CInk.log("Using slow method to clear the canvas. Because of Chrome bug#44017.");
+            } else {
+                w = canvas.width;
+                canvas.width = 0;
+                canvas.width = w;
+            }
+        }
+        renderer = new CInk.Renderer(canvas, params.compiledCode, params.callBackOnFinish);
+        if (renderer !== null) {
+            variName = renderer.render(params.variant);
+            if (params.getMeta) {
+                params.getMeta(variName, params.compiledCode);
+            }
+        }
+        params.rendererVar = renderer;
+    };
     CInk.Renderer = function Renderer(canvas, code, callBackOnFinish) {
         var err, canvases, sortedZIndices, ctx, canvasWidth, canvasHeight, halfCanvasWidth, halfCanvasHeight, correctArcPHandling,
             rendering, queue, backColor, zEnabled, zOffset, t, l, z, tileH, isInPlaceTiling, shutDown, hasEvents,
@@ -1824,7 +1858,7 @@
             var listnerDom, b;
             if (shutDown) {
                 CInk.log('Current Renderer asked to shutdown: Ignoring as already shutting down.');
-                return; //Since we are already shutting down.
+                return false; //Since we are already shutting down.
             }
             
             CInk.log('Current Renderer asked to shutdown: Aye aye sir!');
@@ -1849,6 +1883,7 @@
             } else {
                 callOnDisposeFinish = argCallOnDisposeFinish;
             }
+            return true;
         };
         this.render = function render(variantName) {
             var ruleName, foregroundColor, transform, txtTransform;
