@@ -321,6 +321,20 @@
             }
         };
     }
+    CInk.isBrowserSupported = function isBrowserSupported() {
+        var BrowserDetect = window.BrowserDetect;
+        if (!BrowserDetect) {
+            CInk.err('BrowserDetect object not found. Please make sure to include depends/browser_detect.js.');
+            return undefined;
+        }
+        var browserSupported = false;
+        if ((BrowserDetect.browser === 'Firefox' && BrowserDetect.version * 1 >= 4)
+                || BrowserDetect.browser === 'Chrome'
+                || BrowserDetect.browser === 'Safari') {
+            browserSupported = true;
+        }
+        return browserSupported;
+    };
     CInk.compileAndRun = function compileAndRun(rawCode, canvas, callBackOnFinish, getMeta, variant, slowClear) {
         var compiledCode = CInk.Compile(rawCode), err, w, renderer, variName, ctx;
         if (isNotDefined(compiledCode)) {
@@ -1887,6 +1901,9 @@
         };
         this.render = function render(variantName) {
             var ruleName, foregroundColor, transform, txtTransform;
+            if (!isNotDefined(variantName) && !Math.seedrandom) {
+                CInk.warn("Math.seedrandom not found. Cannot use provided variant name. Please include depends/seedrandom-raw.js.");
+            }
             if (Math.seedrandom) {
                 CInk.log("Math.seedRandom found. Now variation can be captured by name.");
                 if (isNotDefined(variantName)) {
